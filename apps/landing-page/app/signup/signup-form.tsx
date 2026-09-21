@@ -4,26 +4,272 @@ import Link from "next/link";
 import { FormEvent, useState } from "react";
 import { countries } from "./countries";
 import styles from "./signup.module.css";
+import { useSignUp } from "@clerk/nextjs";
 
 interface SignupFormProps {
   role: "client" | "freelancer";
 }
 
 export function SignupForm({ role }: SignupFormProps) {
+  const { signUp, fetchStatus } = useSignUp();
+  const [isError, setIsError] = useState(false);
+  const [verificationCode, setVerificationCode] = useState("");
+  const [pendingEmail, setPendingEmail] = useState("");
+  const [isVerifying, setVerifying] = useState(false);
+
+  const isLoading = fetchStatus === "fetching";
+
+  function getErrorMessage(error: unknown) {
+    if (error instanceof Error) {
+      return error.message;
+    }
+    if (error && typeof error === "object" && "message" in error) {
+      return String(error.message);
+    }
+
+    return "We could not crete your account, please check your details and try again";
+  }
+
+  async function redirectWithSessionToken() {
+    if (!signUp) {
+      return;
+    }
+
+    const { error } = await signUp.finalize({
+      navigate: async ({ session, decorateUrl }) => {
+        const token = await session.getToken();
+
+        if (!token) {
+          throw new Error("Clerk did not return a token");
+        }
+
+        window.location.assign(
+          decorateUrl(
+            `/api/sign-up?token=${encodeURIComponent(token)}&role=${encodeURIComponent(role)}`,
+          ),
+        );
+      },
+    });
+
+    if (error) {
+      throw error;
+    }
+  }
+
   const [showPassword, setShowPassword] = useState(false);
   const [status, setStatus] = useState("");
   const isClient = role === "client";
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setStatus(
-      "The form is ready. Account creation will activate when Clerk is connected.",
-    );
+
+    setStatus("");
+    setIsError(false);
+
+    if (!signUp) {
+      setIsError(true);
+      setStatus("Authentication is still loading. Please try again");
+      return;
+    }
+
+    const formData = new FormData(event.currentTarget);
+    const emailAddress = String(formData.get("email") ?? "");
+
+    try {
+      const { error } = await signUp.password({
+        emailAddress,
+        password: String(formData.get("password") ?? ""),
+        firstName: String(formData.get("firstName") ?? ""),
+        lastName: String(formData.get("lastName") ?? ""),
+        legalAccepted: formData.get("terms") === "on",
+        unsafeMetadata: {
+          role,
+          country: String(formData.get("country") ?? ""),
+        },
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      if (signUp.status === "complete") {
+        redirectWithSessionToken();
+        return;
+      }
+
+      const verification = await signUp.verifications.sendEmailCode();
+
+      if (verification.error) {
+        throw verification.error;
+      }
+
+      setPendingEmail(emailAddress);
+      setVerifying(true);
+      setStatus("We sent a six digit verification code to your email");
+    } catch (error) {
+      setIsError(true);
+      setStatus(getErrorMessage(error));
+    }
   }
 
-  function handleSocialSignup(provider: "Google" | "GitHub") {
-    setStatus(
-      `${provider} signup is ready to activate when Clerk is connected.`,
+  async function handleSocialSignup(provider: "Google" | "GitHub") {
+    setStatus("");
+
+    setIsError(false);
+
+    if (!signUp) {
+      setIsError(true);
+      setStatus("Authentication is still loading. Please try again.");
+      return;
+    }
+
+    try {
+      const { error } = await signUp.sso({
+        strategy: provider === "Google" ? "oauth_google" : "oauth_github",
+        redirectUrl: `/auth/complete?role=${encodeURIComponent(role)}`,
+        redirectCallbackUrl: `/signup?role=${role}`,
+        unsafeMetadata: { role },
+      });
+
+      if (error) {
+        throw error;
+      }
+    } catch (error) {
+      setIsError(true);
+      setStatus(getErrorMessage(error));
+    }
+  }
+
+  async function handleVerification(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    setStatus("");
+    setIsError(false);
+
+    if (!signUp) {
+      setIsError(true);
+      setStatus("Authentication process is ongoing");
+      return;
+    }
+
+    try {
+      const { error } = await signUp.verifications.verifyEmailCode({
+        code: verificationCode,
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      if (signUp.status !== "complete") {
+        throw new Error(
+          "Your email was verifies but the authentication was not complete",
+        );
+      }
+
+      await redirectWithSessionToken();
+    } catch (error) {
+      setIsError(true);
+      setStatus(getErrorMessage(error));
+    }
+  }
+
+  async function resendVerificationCode() {
+    setStatus("");
+    setIsError(false);
+
+    if (!signUp) {
+      return;
+    }
+
+    try {
+      const { error } = await signUp.verifications.sendEmailCode();
+      setIsError(true);
+      setStatus(getErrorMessage(error));
+      if (error) {
+        throw error;
+      }
+
+      setStatus("A new verification code has been sent");
+    } catch (error) {
+      setIsError(true);
+      setStatus(getErrorMessage(error));
+    }
+  }
+
+  if (!isVerifying) {
+    return (
+      <div className="w-full max-w-md text-left">
+        <button
+          className="inline-flex mb-8 cursor-pointer items-center font-semibold gap-2 transition text-sm hover-[#252724] text-[#5e625c]"
+          type="button"
+          onClick={() => {
+            void signUp.reset();
+            setVerifying(false);
+            setVerificationCode("");
+            setStatus("");
+          }}
+        >
+          Back to account details
+        </button>
+        <div className="text-center">
+          <span className="inline-flex rounded-full bg-[#e9f4e6] xp-3 font-semibold py-1.5 text-xs ">
+            Verify your email
+          </span>
+          <h1 className={`${styles.formTitle} mt-4 text-[#171916]`}>
+            Check your inbox
+          </h1>
+          <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-[#72766f]">
+            Enter the 6 digit code sent to{" "}
+            <span className="font-semibold ">{pendingEmail}</span>
+          </p>
+        </div>
+        <form onSubmit={handleVerification} className="mt-8 space-y-5">
+          <label
+            htmlFor=""
+            className="grid   gap-3 text-sm font-semibold text-[#30332f]"
+          >
+            Verification code
+            <input
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              minLength={6}
+              maxLength={6}
+              className="h-12 rounded-xl px-4 text-center tracking-[0.35em] outline-none transition placeholder:text-[#a2a59f] focus:border-[#5d8b59] focus:ring-3 focus:ring-[#dcebd9] border border-black/13 bg-white text-lg"
+              required
+              autoFocus
+              value={verificationCode}
+              onChange={(event) =>
+                setVerificationCode(event.target.value.replace(/\D/g, ""))
+              }
+              placeholder="000000"
+            />
+          </label>
+          <button
+            onClick={() => void resendVerificationCode()}
+            className="h-12 w-full cursor-pointer rounded-xl bg-[#252724] text-sm font-semibold text-white transition hover:bg-[#3b3e39] disabled:cursor-not-allowed disabled:opacity-50 shadow-sm "
+            disabled={isVerifying || verificationCode.length !== 6}
+            type="submit"
+          >
+            {isLoading ? "Verifying..." : "Verify and continue"}
+          </button>
+          <button
+            className=" w-full cursor-pointer  text-sm font-semibold text-[#497446]  disabled:opacity-50 "
+            disabled={isVerifying}
+            type="button"
+          >
+            Send a new Code
+          </button>
+          {status && (
+            <p
+              className={`${isError ? "bg-[#fff0ee] text-[#9a4d45]" : "bg-[#edf5eb] text-[#4e704b]"} rounded-xl px-4 py-3 text-center text-xs font-medium`}
+              role={isError ? "alert" : "status"}
+            >
+              {status}
+            </p>
+          )}
+        </form>
+      </div>
     );
   }
 
@@ -233,15 +479,18 @@ export function SignupForm({ role }: SignupFormProps) {
         </label>
 
         <button
+          disabled={isLoading}
           type="submit"
           className="h-12 cursor-pointer w-full rounded-xl bg-[#252724] text-sm font-semibold text-white shadow-sm transition hover:bg-[#3b3e39] focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-[#4c7849]"
         >
-          Create {isClient ? "client" : "freelancer"} account
+          {isLoading
+            ? "Creating..."
+            : `Create ${isClient ? "client" : "freelancer"} account`}
         </button>
 
         {status && (
           <p
-            className="rounded-xl bg-[#edf5eb] px-4 py-3 text-center text-xs font-medium text-[#4e704b]"
+            className={`  ${isError ? "bg-[#fff0ee]  text-[#914d45]" : "bg-[#edf53b] text-[#3e704b]"}    rounded-xl bg-[#edf5eb] px-4 py-3 text-center text-xs font-medium text-[#4e704b]`}
             role="status"
           >
             {status}
