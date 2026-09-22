@@ -197,7 +197,7 @@ export function SignupForm({ role }: SignupFormProps) {
     }
   }
 
-  if (!isVerifying) {
+  if (isVerifying) {
     return (
       <div className="w-full max-w-md text-left">
         <button
@@ -248,7 +248,7 @@ export function SignupForm({ role }: SignupFormProps) {
           <button
             onClick={() => void resendVerificationCode()}
             className="h-12 w-full cursor-pointer rounded-xl bg-[#252724] text-sm font-semibold text-white transition hover:bg-[#3b3e39] disabled:cursor-not-allowed disabled:opacity-50 shadow-sm "
-            disabled={isVerifying || verificationCode.length !== 6}
+            disabled={verificationCode.length !== 6}
             type="submit"
           >
             {isLoading ? "Verifying..." : "Verify and continue"}

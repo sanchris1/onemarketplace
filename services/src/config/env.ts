@@ -22,6 +22,7 @@ const parsePort = (value: string): number => {
 export const env = {
   port: parsePort(process.env.PORT!),
   nodeEnv: process.env.NODE_ENV ?? "development",
+  clerkSecretKey: process.env.CLERK_SECRET_KEY,
   redis: {
     host: process.env.REDIS_HOST ?? "localhost",
     port: parsePort(process.env.REDIS_PORT ?? "6379"),
